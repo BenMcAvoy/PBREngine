@@ -12,8 +12,8 @@ from typing import List, Tuple
 import math
 
 # Sphere parameters
-LAT_SEGMENTS = 16  # latitude divisions (from top to bottom, excluding poles)
-LON_SEGMENTS = 32  # longitude divisions (around equator)
+LAT_SEGMENTS = 16*8  # latitude divisions (from top to bottom, excluding poles)
+LON_SEGMENTS = 32*8  # longitude divisions (around equator)
 RADIUS = 1.0
 
 Vec3 = Tuple[float, float, float]
