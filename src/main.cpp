@@ -2,9 +2,11 @@
 #include <pbre/render/camera.hpp>
 #include <pbre/render/material.hpp>
 #include <pbre/wrapper/buffers.hpp>
+#include <pbre/wrapper/framebuffer.hpp>
+#include <pbre/wrapper/model.hpp>
 #include <pbre/wrapper/shader.hpp>
-#include <pbre/wrapper/window.hpp>
 #include <pbre/wrapper/texture.hpp>
+#include <pbre/wrapper/window.hpp>
 
 #include <imgui.h>
 
@@ -35,6 +37,17 @@ int run() {
     shader.loadFromFiles("shaders/vert.glsl", "shaders/frag.glsl");
     shader.use();
 
+    // Tonemapping post-process shader
+    PBRE::Wrapper::Shader tonemap;
+    tonemap.loadFromFiles("shaders/tonemap_vert.glsl", "shaders/tonemap_frag.glsl");
+    tonemap.use();
+    tonemap.set("uColor", 0);
+    tonemap.set("uExposure", 1.0f);
+
+    // Fullscreen triangle needs a VAO in core profile
+    GLuint screenVAO = 0;
+    glGenVertexArrays(1, &screenVAO);
+
     // shader for the light indicator (simple unlit/emissive)
     PBRE::Wrapper::Shader lightShader;
     lightShader.loadFromFiles("shaders/light_vert.glsl", "shaders/light_frag.glsl");
@@ -48,11 +61,16 @@ int run() {
     // Inform shader of environment map mip count for roughness-based LOD
     shader.set("envMaxMips", envIBL.getMaxMips());
     shader.set("iblIntensity", 1.0f);
-    shader.set("ao", 1.0f);
+    // AO fallback value if material has no AO map
+    shader.set("material.AO", 1.0f);
     shader.set("horizonFadePower", 2.0f);
     shader.set("debugMode", 0);
     shader.set("enableIBL", 1);
     shader.set("enableDirect", 1);
+
+    // HDR framebuffer (RGBA16F)
+    PBRE::Wrapper::Framebuffer hdrFbo(window.getWidth(), window.getHeight(), 4);
+    float exposure = 1.0f;
 
     // Light
     PBRE::vec3 lightPosition = PBRE::vec3(5.0f, 5.0f, 5.0f);
@@ -69,9 +87,35 @@ int run() {
         .metallic = 0.0f,
         .roughness = 0.5f};
 
-    shader.set("material.albedo", material.albedo);
-    shader.set("material.metallic", material.metallic);
-    shader.set("material.roughness", material.roughness);
+    // Test model
+    PBRE::Wrapper::Model model;
+    if (!model.loadFromFile("resources/lion_head/lion_head_4k.gltf")) {
+        std::cerr << "Failed to load model\n";
+        return -1;
+    }
+    PBRE::Wrapper::Model tableModel;
+    if (!tableModel.loadFromFile("resources/table/round_wooden_table_02_4k.gltf")) {
+        std::cerr << "Failed to load table model\n";
+        return -1;
+    }
+    PBRE::Wrapper::Model cameraModel;
+    if (!cameraModel.loadFromFile("resources/vintage_camera/vintage_video_camera_4k.gltf")) {
+        std::cerr << "Failed to load camera model\n";
+        return -1;
+    }
+
+    BIND_MATERIAL_PARAM(material, albedo, Albedo, 1, shader, PBRE::vec3);
+    BIND_MATERIAL_PARAM(material, metallic, Metallic, 2, shader, float);
+    BIND_MATERIAL_PARAM(material, roughness, Roughness, 3, shader, float);
+
+    if (auto tex = material.normal; tex) {
+        shader.set("u_HasNormalMap", 1);
+        shader.set("u_NormalMap", 4);
+        glActiveTexture(GL_TEXTURE0 + 4);
+        tex->bind(4);
+    } else {
+        shader.set("u_HasNormalMap", 0);
+    }
 
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LESS); // or GL_LEQUAL
@@ -84,7 +128,6 @@ int run() {
 
     // Grid controls
     bool mouseLocked = false;
-    static bool showGrid = true;
     static int gridRows = 6;
     static int gridCols = 6;
     static float gridSpacing = 2.5f;
@@ -115,41 +158,51 @@ int run() {
             static int debugMode = 0;
             static bool ibl = true, direct = true;
             static float iblIntensity = 1.0f;
-            static float ao = 1.0f;
             static float horizonFadePower = 2.0f;
             ImGui::Checkbox("Enable IBL", &ibl);
             ImGui::SameLine();
             ImGui::Checkbox("Enable Direct", &direct);
             ImGui::SliderFloat("IBL Intensity", &iblIntensity, 0.0f, 2.0f);
-            ImGui::SliderFloat("Ambient Occlusion (AO)", &ao, 0.0f, 1.0f);
             ImGui::SliderFloat("Horizon Fade Power", &horizonFadePower, 0.0f, 8.0f);
             ImGui::SliderInt("Debug Mode", &debugMode, 0, 4);
+            ImGui::Separator();
+            ImGui::SliderFloat("Exposure", &exposure, 0.0f, 5.0f);
 
             shader.use();
             shader.set("debugMode", debugMode);
             shader.set("enableIBL", ibl ? 1 : 0);
             shader.set("enableDirect", direct ? 1 : 0);
             shader.set("iblIntensity", iblIntensity);
-            shader.set("ao", ao);
             shader.set("horizonFadePower", horizonFadePower);
+            tonemap.use();
+            tonemap.set("uExposure", exposure);
 
-            ImGui::Separator();
-            ImGui::Text("PBR Test Grid");
-            ImGui::Checkbox("Show Grid (NxN Spheres)", &showGrid);
-            ImGui::SliderInt("Rows", &gridRows, 2, 10);
-            ImGui::SliderInt("Cols", &gridCols, 2, 10);
-            ImGui::SliderFloat("Spacing", &gridSpacing, 1.0f, 6.0f);
-            ImGui::ColorEdit3("Base Albedo", &material.albedo.x);
-            if (!showGrid) {
-                ImGui::SliderFloat("Metallic", &material.metallic, 0.0f, 1.0f);
-                ImGui::SliderFloat("Roughness", &material.roughness, 0.0f, 1.0f);
+            if (auto metallicPtr = std::get_if<float>(&material.metallic); metallicPtr) {
+                if (auto roughnessPtr = std::get_if<float>(&material.roughness); roughnessPtr) {
+                    ImGui::SliderFloat("Metallic", metallicPtr, 0.0f, 1.0f);
+                    ImGui::SliderFloat("Roughness", roughnessPtr, 0.0f, 1.0f);
+                    shader.use();
+                    shader.set("material.Metallic", *metallicPtr);
+                    shader.set("material.Roughness", *roughnessPtr);
+                }
+            }
+
+            // AO
+            if (auto aoPtr = std::get_if<float>(&material.ao); aoPtr) {
+                ImGui::SliderFloat("AO", aoPtr, 0.0f, 1.0f);
+                shader.use();
+                shader.set("material.AO", *aoPtr);
             }
 
             shader.use();
-            shader.set("material.albedo", material.albedo);
-            if (!showGrid) {
-                shader.set("material.metallic", material.metallic);
-                shader.set("material.roughness", material.roughness);
+            // shader.set("material.albedo", material.albedo);
+            // BIND_MATERIAL_PARAM(material, albedo, Albedo, 1, shader, PBRE::vec3);
+
+            if (auto albVec3 = std::get_if<PBRE::vec3>(&material.albedo); albVec3) {
+                ImGui::ColorEdit3("Albedo Color", &albVec3->x);
+                shader.set("material.Albedo", *albVec3);
+            } else if (auto albTex = std::get_if<std::shared_ptr<PBRE::Wrapper::Texture>>(&material.albedo); albTex && *albTex) {
+                ImGui::Text("Albedo Texture: %dx%d", (*albTex)->getWidth(), (*albTex)->getHeight());
             }
 
             ImGui::Separator();
@@ -202,6 +255,17 @@ int run() {
             }
         }
 
+        // Ensure HDR framebuffer matches window size
+        hdrFbo.resize(window.getWidth(), window.getHeight());
+
+        // Render scene into HDR (MSAA) FBO
+        glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_LESS);
+        hdrFbo.bind();
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        glDepthMask(GL_TRUE);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
         shader.use();
         PBRE::mat4 view = camera.getViewMatrix();
         PBRE::mat4 projection = camera.getProjectionMatrix();
@@ -214,62 +278,64 @@ int run() {
         shader.set("projection", projection);
         shader.set("viewPos", camera.getPosition());
 
-        if (showGrid) {
-            // Draw a grid of spheres: metallic varies across columns, roughness across rows
-            float halfCols = (gridCols - 1) * 0.5f;
-            float halfRows = (gridRows - 1) * 0.5f;
-            for (int r = 0; r < gridRows; ++r) {
-                float rough = (gridRows > 1) ? float(r) / float(gridRows - 1) : 0.0f;
-                // clamp to avoid 0.0 roughness fireflies if desired
-                rough = glm::clamp(rough, 0.02f, 1.0f);
-                for (int c = 0; c < gridCols; ++c) {
-                    float metal = (gridCols > 1) ? float(c) / float(gridCols - 1) : 0.0f;
+        PBRE::Transform t;
+        PBRE::mat4 modelMat = t.toMat4();
+        shader.set("model", modelMat);
+        // Draw loaded model
+        model.draw(shader);
 
-                    PBRE::Transform t;
-                    t.position = PBRE::vec3((c - halfCols) * gridSpacing, 0.0f, (r - halfRows) * gridSpacing);
-                    t.scale = PBRE::vec3(1.0f);
-                    PBRE::mat4 model = t.toMat4();
+        // Draw table
+        PBRE::Transform tableTransform;
+        tableTransform.position = PBRE::vec3(0.0f, -0.75f, 0.0f);
+        shader.set("model", tableTransform.toMat4());
+        tableModel.draw(shader);
 
-                    shader.set("model", model);
-                    shader.set("material.albedo", material.albedo);
-                    shader.set("material.metallic", metal);
-                    shader.set("material.roughness", rough);
+        // Draw camera model on table
+        PBRE::Transform cameraTransform;
+        cameraTransform.position = PBRE::vec3(0.2f, 0.0f, 0.0f);
+        cameraTransform.rotation = glm::angleAxis(glm::radians(12.0f), PBRE::vec3(0.0f, 1.0f, 0.0f));
+        shader.set("model", cameraTransform.toMat4());
+        cameraModel.draw(shader);
 
-                    buffers.draw();
-                }
-            }
-        } else {
-            // Single sphere mode
-            PBRE::Transform t; // identity at origin
-            PBRE::mat4 model = t.toMat4();
-            shader.set("model", model);
-            shader.set("material.albedo", material.albedo);
-            shader.set("material.metallic", material.metallic);
-            shader.set("material.roughness", material.roughness);
-            buffers.draw();
-        }
+        ImGui::Begin("Table");
 
-    // Draw light indicator: small emissive sphere at lightPosition
+        // DragFloat3 for position
+        ImGui::DragFloat3("Position", &cameraTransform.position.x, 0.1f);
+
+        ImGui::End();
+
         lightShader.use();
         PBRE::Transform lightTransform;
         lightTransform.position = lightPosition;
-        lightTransform.scale = PBRE::vec3(0.2f); // small indicator
+        lightTransform.scale = PBRE::vec3(0.2f);
         PBRE::mat4 lightModel = lightTransform.toMat4();
         lightShader.set("model", lightModel);
         lightShader.set("view", view);
         lightShader.set("projection", projection);
-        // use a visible color (tone-mapped in main shader) — provide smaller values here
         PBRE::vec3 indicatorColor = PBRE::vec3(1.0f, 1.0f, 0.8f);
         lightShader.set("color", indicatorColor);
-        // Draw with depth test and same buffers
         buffers.draw();
+
+        // Resolve MSAA to single-sample color
+        hdrFbo.resolve();
+
+        // Tonemap to default framebuffer
+        PBRE::Wrapper::Framebuffer::unbind();
+        glDisable(GL_DEPTH_TEST);
+        // Tonemap shader outputs gamma-corrected (sRGB) LDR. Ensure the default framebuffer doesn't apply another sRGB conversion.
+        glDisable(GL_FRAMEBUFFER_SRGB);
+        glBindVertexArray(screenVAO);
+        tonemap.use();
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, hdrFbo.colorTex());
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        glBindVertexArray(0);
 
         window.endFrame();
     }
 
     return 0;
 }
-
 
 int main(int argc, char** argv) {
     try {

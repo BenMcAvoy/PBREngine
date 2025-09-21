@@ -3,7 +3,10 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 
+#include <variant>
+
 namespace PBRE {
+using vec2 = glm::vec2;
 using vec3 = glm::vec3;
 using vec4 = glm::vec4;
 using mat4 = glm::mat4;
@@ -35,3 +38,22 @@ struct Transform {
           scale(1.0f, 1.0f, 1.0f) {}
 };
 } // namespace PBRE
+
+// util
+template<typename T, typename... Ts>
+const T* get_if(const std::variant<Ts...>& v) {
+    return std::get_if<T>(&v);
+}
+
+#define BIND_MATERIAL_PARAM(material, paramName, uniformName, texUnit, shader, fallbackType) \
+do { \
+    if (auto tex = std::get_if<std::shared_ptr<PBRE::Wrapper::Texture>>(&material.paramName); tex && *tex) { \
+        shader.set("material.has" #uniformName "Map", 1); \
+        shader.set("material." #uniformName "Map", texUnit); \
+        glActiveTexture(GL_TEXTURE0 + texUnit); \
+        (*tex)->bind(texUnit); \
+    } else { \
+        shader.set("material.has" #uniformName "Map", 0); \
+        shader.set("material." #uniformName, std::get<fallbackType>(material.paramName)); \
+    } \
+} while(0)

@@ -2,6 +2,8 @@
 
 #include <glad/glad.h>
 
+#include <vector>
+
 namespace PBRE::Wrapper {
 class Texture {
   public:
@@ -9,8 +11,8 @@ class Texture {
     ~Texture();
 
     void loadFromFile(const char* path, bool equirectangular = false);
-    // Convert an equirectangular HDR image into a cubemap of given face size (e.g., 512)
     void loadHDRAsCubemap(const char* path, int faceSize = 512);
+    bool loadFromImageData(int width, int height, int channels, const std::vector<unsigned char>& data);
 
     void bind(unsigned int unit = 0) const;
     GLuint getID() const;

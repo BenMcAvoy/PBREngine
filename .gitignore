@@ -4,3 +4,6 @@ compile_commands.json
 .xmake
 .vscode
 imgui.ini
+*.py
+*.lua
+*.txt

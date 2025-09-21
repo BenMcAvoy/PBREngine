@@ -1,7 +1,9 @@
 #include "texture.hpp"
 
 #define STB_IMAGE_IMPLEMENTATION
+#define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image.h>
+#include <stb_image_write.h>
 
 #include <stdexcept>
 #include <string>
@@ -68,6 +70,30 @@ void Texture::loadFromFile(const char* path, bool equirectangular) {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     }
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+}
+
+bool Texture::loadFromImageData(int width, int height, int channels, const std::vector<unsigned char>& data) {
+    if (data.empty() || width <= 0 || height <= 0 || (channels != 1 && channels != 3 && channels != 4)) {
+        return false;
+    }
+    target_ = GL_TEXTURE_2D;
+    glBindTexture(GL_TEXTURE_2D, id_);
+    GLenum format = GL_RGB;
+    if (channels == 1)
+        format = GL_RED;
+    else if (channels == 3)
+        format = GL_RGB;
+    else if (channels == 4)
+        format = GL_RGBA;
+    glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, format, GL_UNSIGNED_BYTE, data.data());
+    width_ = width; height_ = height;
+
+    glGenerateMipmap(GL_TEXTURE_2D);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    return true;
 }
 
 void Texture::bind(unsigned int unit) const {

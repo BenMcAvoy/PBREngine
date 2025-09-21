@@ -18,6 +18,9 @@ Window::Window(int width, int height, const char* title) {
         throw std::runtime_error("Failed to init GLFW3");
     }
 
+    // enable msaa4
+    glfwWindowHint(GLFW_SAMPLES, 4);
+
     window_ = glfwCreateWindow(width, height, title, nullptr, nullptr);
 
     if (!window_) {
@@ -59,6 +62,8 @@ bool Window::shouldClose() const {
 }
 void Window::beginFrame() const {
     glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
+    // Ensure depth writes enabled so glClear clears depth buffer as expected
+    glDepthMask(GL_TRUE);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     ImGui_ImplOpenGL3_NewFrame();
