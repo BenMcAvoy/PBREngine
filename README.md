@@ -175,7 +175,10 @@ PBREngine/
 │   ├── tonemap_vert.glsl     # Tonemapping vertex shader
 │   ├── tonemap_frag.glsl     # Tonemapping fragment shader
 │   ├── light_vert.glsl       # Light indicator vertex shader
-│   └── light_frag.glsl       # Light indicator fragment shader
+│   ├── light_frag.glsl       # Light indicator fragment shader
+│   ├── prefilter_env.vert    # Environment map pre-filtering vertex shader
+│   ├── skybox_vert.glsl      # Skybox vertex shader
+│   └── skybox_frag.glsl      # Skybox fragment shader
 ├── resources/
 │   ├── *.hdr                 # HDR environment maps
 │   └── */                    # glTF model directories (lion_head, table, vintage_camera)
